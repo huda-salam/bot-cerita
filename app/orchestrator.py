@@ -3,6 +3,7 @@ from uuid import uuid4
 
 from .agents import director, planner, writer, critic, rewriter
 from .config import settings
+from .context import resolve_universe_context
 from .expert_layer import generate_what_ifs, run_expert_panel, format_expert_guidance
 from .models import StoryRequest, StorySpec, StoryOutline, Story, Critique, StoryBible, WhatIfResult
 from .persistence import init_db, save_state
@@ -12,6 +13,7 @@ from .persistence import init_db, save_state
 class StoryState:
     id: str
     request: StoryRequest
+    universe_context: str = ""
     what_if: WhatIfResult | None = None
     spec: StorySpec | None = None
     outline: StoryOutline | None = None
@@ -24,6 +26,7 @@ class StoryState:
         return {
             "id": self.id,
             "request": self.request.model_dump(mode="json"),
+            "universe_context": self.universe_context,
             "what_if": self.what_if.model_dump(mode="json") if self.what_if else None,
             "spec": self.spec.model_dump(mode="json") if self.spec else None,
             "outline": self.outline.model_dump(mode="json") if self.outline else None,
@@ -41,12 +44,14 @@ def build_initial_bible(spec: StorySpec) -> StoryBible:
 async def run_story(request: StoryRequest) -> StoryState:
     init_db()
     state = StoryState(id=str(uuid4()), request=request)
+    state.universe_context = resolve_universe_context(request)
     save_state(state.id, state.snapshot(), "ideation")
 
     state.what_if = await generate_what_ifs(request)
     save_state(state.id, state.snapshot(), "directing")
 
-    state.spec = await director(request, state.what_if.model_dump_json())
+    state.spec = await director(request, state.what_if.model_dump_json(), state.universe_context)
+    state.spec = state.spec.model_copy(update={"universe_context": state.universe_context})
     state.bible = build_initial_bible(state.spec)
     save_state(state.id, state.snapshot(), "planning", state.spec.title)
 
@@ -61,8 +66,6 @@ async def run_story(request: StoryRequest) -> StoryState:
     state.story = await writer(state.spec, state.outline, state.bible.model_dump_json(), guidance)
     save_state(state.id, state.snapshot(), "reviewing", state.story.title)
 
-    # The Story Bible is now refreshed after generation. This makes durable facts available
-    # to subsequent revisions without forcing a full rewrite of the original specification.
     state.bible = refresh_bible_from_story(state.bible, state.story)
     save_state(state.id, state.snapshot(), "reviewing", state.story.title)
 
@@ -83,20 +86,10 @@ async def run_story(request: StoryRequest) -> StoryState:
 
 
 def refresh_bible_from_story(bible: StoryBible, story: Story) -> StoryBible:
-    """Conservative deterministic memory refresh.
-
-    The MVP stores generated scenes as timeline anchors rather than asking an LLM
-    to invent facts. A future milestone can replace this with a typed fact extractor.
-    """
     timeline = list(bible.timeline)
     for index, scene in enumerate(story.scenes, start=1):
         marker = f"Scene {index}: {scene[:500].replace(chr(10), ' ')}"
         if marker not in timeline:
             timeline.append(marker)
-    return StoryBible(
-        characters=bible.characters,
-        locations=bible.locations,
-        rules=bible.rules,
-        timeline=timeline,
-        unresolved_threads=bible.unresolved_threads,
-    )
+    return StoryBible(characters=bible.characters, locations=bible.locations, rules=bible.rules,
+                      timeline=timeline, unresolved_threads=bible.unresolved_threads)
