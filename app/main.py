@@ -5,13 +5,15 @@ from .persistence import init_db, create_universe, list_universes, get_universe,
 from .asset_api import router as asset_router
 from .world_api import router as world_router
 from .visual_api import router as visual_router
+from .storyboard_api import router as storyboard_router
 from .context_engine import build_context_pack
 from pydantic import BaseModel, Field
 
-app = FastAPI(title="Bot Cerita", version="0.9.0")
+app = FastAPI(title="Bot Cerita", version="1.0.0")
 app.include_router(asset_router)
 app.include_router(world_router)
 app.include_router(visual_router)
+app.include_router(storyboard_router)
 
 class ContextRequest(BaseModel):
     query: str
@@ -23,12 +25,10 @@ def startup() -> None:
     init_db()
 
 @app.get("/health")
-async def health():
-    return {"status": "ok", "version": "0.9.0"}
+async def health(): return {"status": "ok", "version": "1.0.0"}
 
 @app.get("/universes", response_model=list[Universe])
-async def get_universes():
-    return list_universes()
+async def get_universes(): return list_universes()
 
 @app.post("/universes", response_model=Universe)
 async def post_universe(request: UniverseCreate):
