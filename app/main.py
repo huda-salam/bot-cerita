@@ -3,7 +3,7 @@ from .models import StoryRequest, StoryResponse
 from .orchestrator import run_story
 from .persistence import init_db
 
-app = FastAPI(title="Bot Cerita", version="0.2.0")
+app = FastAPI(title="Bot Cerita", version="0.3.0")
 
 
 @app.on_event("startup")
@@ -13,7 +13,7 @@ def startup() -> None:
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    return {"status": "ok", "version": "0.3.0"}
 
 
 @app.post("/stories", response_model=StoryResponse)
