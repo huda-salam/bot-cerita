@@ -1,19 +1,37 @@
 # Bot Cerita
 
-MVP AI Story Agent for generating short stories with a stateful orchestrator and specialist expert layer.
+Universe-aware AI Story Engine. Satu engine dapat digunakan untuk banyak universe, karakter, dan cerita tanpa membuat bot terpisah untuk setiap IP/world.
 
 ## Architecture
 
 ```text
+                         BOT CERITA ENGINE
+                                |
+              +-----------------+-----------------+
+              |                 |                 |
+            AGENTS           UNIVERSES         SKILLS
+              |                 |                 |
+       Plot / Writer /     World / Canon /    Plot / Fantasy /
+       Critic / Visual     Characters / Lore   Mystery / Comedy ...
+              |                 |                 |
+              +-----------------+-----------------+
+                                |
+                         ORCHESTRATOR
+                                |
+                              Claude
+```
+
+Current story workflow:
+
+```text
 Request
+  -> Resolve Universe + Character + Canon
   -> What-If Creative Engine
   -> Story Director
   -> Story Planner
   -> Expert Panel
-       |- Plot Expert
-       |- Children's Literature Expert
-       `- Character Expert
   -> Writer
+  -> Story Bible refresh
   -> Critic
   -> Rewriter (when needed)
   -> Final Story
@@ -21,11 +39,86 @@ Request
 
 The orchestrator owns workflow and state. LLM agents are specialized workers. Structured JSON is validated with Pydantic.
 
-## Why the expert layer exists
+## Universe model
 
-The system deliberately separates **knowledge/skill** from the writer. Before prose is generated, independent specialists review the story architecture and provide actionable guidance. This makes the writer better without turning the writer prompt into an unmaintainable mega-prompt.
+A universe is a first-class context boundary. Characters belong to a universe; stories select a universe and zero or more characters.
 
-The What-If engine explores materially different premises before the Director commits to one direction. Candidates are scored for novelty, emotional potential, age fit, and overall story potential.
+```text
+Universe
+├── Characters
+├── Canon entries
+├── Lore (next milestone)
+├── Locations (next milestone)
+├── Timeline
+└── Visual Bible (next milestone)
+
+Story
+├── selected Universe
+├── selected Characters
+├── Story Bible
+└── Scenes
+```
+
+Canon has authority levels:
+
+- `official` — binding
+- `established` — binding
+- `provisional` — usable as a hint, not a fact
+- `non_canon` — never treated as canon
+
+This lets the same engine support many original universes and, where the user has the necessary rights, licensed or owned character/world packs.
+
+## Current API
+
+Create a universe:
+
+```http
+POST /universes
+```
+
+```json
+{"name":"Dunia Arunika","description":"A fantasy world created by the user."}
+```
+
+Add a character:
+
+```http
+POST /universes/{universe_id}/characters
+```
+
+Add canon:
+
+```http
+POST /universes/{universe_id}/canon
+```
+
+```json
+{
+  "category":"world_rule",
+  "content":"Only trained elementalists can manipulate fire.",
+  "authority":"official"
+}
+```
+
+Generate a story using the universe:
+
+```http
+POST /stories
+```
+
+```json
+{
+  "idea":"Arka menemukan makhluk kecil di hutan",
+  "universe_id":"<universe-id>",
+  "character_ids":["<character-id>"],
+  "target_age":"7-10",
+  "genre":"fantasy",
+  "tone":["warm","funny","adventurous"],
+  "language":"Indonesian",
+  "length":"medium",
+  "what_if_count":5
+}
+```
 
 ## LLM strategy
 
@@ -34,7 +127,7 @@ Anthropic is the default provider:
 - **What-If:** Claude Sonnet 5 — creative exploration and candidate scoring.
 - **Director:** Claude Haiku 4.5 — fast specification extraction.
 - **Planner:** Claude Opus 5 — deepest reasoning for plot architecture.
-- **Expert panel:** Claude Sonnet 5 — three independent specialist reviews in parallel.
+- **Expert panel:** Claude Sonnet 5 — independent specialist reviews.
 - **Writer:** Claude Sonnet 5 — primary creative writing model.
 - **Critic:** Claude Sonnet 5 — independent editorial evaluation.
 - **Rewriter:** Claude Sonnet 5 — high-quality revision.
@@ -48,7 +141,7 @@ OpenRouter remains available as an optional provider for experimentation with ot
 - Pydantic
 - Anthropic Messages API (default)
 - OpenRouter (optional)
-- SQLite-ready state persistence
+- SQLite-ready persistence
 
 ## Run locally
 
@@ -74,41 +167,43 @@ Start:
 uvicorn app.main:app --reload
 ```
 
-Health check: `GET /health`
+## Roadmap
 
-Generate a story with `POST /stories`:
+### 0.5 — Universe Foundation (current)
+- Universe entity
+- Character registry
+- Canon registry with authority levels
+- Universe-aware context resolver
+- Story request can select universe + characters
 
-```json
-{
-  "idea": "Seorang anak menemukan naga kecil di gudang",
-  "target_age": "7-10",
-  "genre": "fantasy",
-  "tone": ["funny", "warm", "adventurous"],
-  "language": "Indonesian",
-  "length": "medium",
-  "what_if_count": 5
-}
-```
+### 0.6 — Rich World Model
+- Locations
+- Factions
+- Lore documents
+- Character relationships
+- Timeline events
+- Character/version history
 
-## Model routing
+### 0.7 — Context Engine
+- Relevant-context retrieval
+- Canon conflict detection
+- context budgeting
+- cross-story memory
 
-Model names live in `.env`, so changing the routing does not require changing agent code.
+### 0.8 — Visual Bible
+- Character visual identity
+- Universe art direction
+- style profiles
+- character sheets
 
-```env
-WHAT_IF_MODEL=claude-sonnet-5
-DIRECTOR_MODEL=claude-haiku-4-5
-PLANNER_MODEL=claude-opus-5
-EXPERT_MODEL=claude-sonnet-5
-WRITER_MODEL=claude-sonnet-5
-CRITIC_MODEL=claude-sonnet-5
-REWRITER_MODEL=claude-sonnet-5
-```
+### 0.9 — Storyboard
+- scene-to-panel planning
+- camera language
+- dialogue/layout
+- image prompts
 
-## Next milestones
-
-1. Persist expert runs and token/cost telemetry.
-2. Add Story Bible mutation/continuity tools after each scene.
-3. Add genre/domain skill registry and dynamic skill selection.
-4. Add storyboard + character consistency + image generation.
-5. Add background jobs/SSE for long-running generations.
-6. Add automated evaluation datasets and regression tests.
+### 1.0 — Story Studio
+- image generation
+- comic assembly
+- long-running jobs/SSE
+- evaluation/regression suite
