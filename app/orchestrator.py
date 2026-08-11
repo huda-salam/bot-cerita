@@ -4,15 +4,7 @@ from uuid import uuid4
 from .agents import director, planner, writer, critic, rewriter
 from .config import settings
 from .expert_layer import generate_what_ifs, run_expert_panel, format_expert_guidance
-from .models import (
-    StoryRequest,
-    StorySpec,
-    StoryOutline,
-    Story,
-    Critique,
-    StoryBible,
-    WhatIfResult,
-)
+from .models import StoryRequest, StorySpec, StoryOutline, Story, Critique, StoryBible, WhatIfResult
 from .persistence import init_db, save_state
 
 
@@ -43,13 +35,7 @@ class StoryState:
 
 
 def build_initial_bible(spec: StorySpec) -> StoryBible:
-    return StoryBible(
-        characters=spec.characters,
-        locations=[spec.setting],
-        rules=[],
-        timeline=[],
-        unresolved_threads=[spec.conflict],
-    )
+    return StoryBible(characters=spec.characters, locations=[spec.setting], rules=[], timeline=[], unresolved_threads=[spec.conflict])
 
 
 async def run_story(request: StoryRequest) -> StoryState:
@@ -57,63 +43,60 @@ async def run_story(request: StoryRequest) -> StoryState:
     state = StoryState(id=str(uuid4()), request=request)
     save_state(state.id, state.snapshot(), "ideation")
 
-    # 1. Explore multiple dramatically different directions before committing.
     state.what_if = await generate_what_ifs(request)
     save_state(state.id, state.snapshot(), "directing")
 
-    what_if_context = state.what_if.model_dump_json() if state.what_if else ""
-    state.spec = await director(request, what_if_context)
+    state.spec = await director(request, state.what_if.model_dump_json())
     state.bible = build_initial_bible(state.spec)
     save_state(state.id, state.snapshot(), "planning", state.spec.title)
 
-    # 2. Build the plot architecture.
     state.outline = await planner(state.spec)
     save_state(state.id, state.snapshot(), "expert_review", state.spec.title)
 
-    # 3. Independent expert panel reviews the architecture before prose is generated.
     panel = await run_expert_panel(state.spec, state.outline)
     guidance = format_expert_guidance(panel)
     state.spec = state.spec.model_copy(update={"expert_guidance": guidance})
     save_state(state.id, state.snapshot(), "writing", state.spec.title)
 
-    # 4. Write with shared Story Bible + expert guidance.
-    state.story = await writer(
-        state.spec,
-        state.outline,
-        state.bible.model_dump_json(),
-        guidance,
-    )
+    state.story = await writer(state.spec, state.outline, state.bible.model_dump_json(), guidance)
     save_state(state.id, state.snapshot(), "reviewing", state.story.title)
 
-    # 5. Editorial loop.
+    # The Story Bible is now refreshed after generation. This makes durable facts available
+    # to subsequent revisions without forcing a full rewrite of the original specification.
+    state.bible = refresh_bible_from_story(state.bible, state.story)
+    save_state(state.id, state.snapshot(), "reviewing", state.story.title)
+
     for _ in range(settings.max_revisions + 1):
-        state.critique = await critic(
-            state.spec,
-            state.outline,
-            state.story,
-            state.bible.model_dump_json(),
-            guidance,
-        )
-        save_state(
-            state.id,
-            state.snapshot(),
-            "revising" if state.critique.needs_revision else "completed",
-            state.story.title,
-        )
+        state.critique = await critic(state.spec, state.outline, state.story, state.bible.model_dump_json(), guidance)
+        save_state(state.id, state.snapshot(), "revising" if state.critique.needs_revision else "completed", state.story.title)
         if not state.critique.needs_revision or state.critique.overall_score >= settings.critic_threshold:
             break
         if state.revisions >= settings.max_revisions:
             break
-
-        state.story = await rewriter(
-            state.spec,
-            state.story,
-            state.critique,
-            state.bible.model_dump_json(),
-            guidance,
-        )
+        state.story = await rewriter(state.spec, state.story, state.critique, state.bible.model_dump_json(), guidance)
+        state.bible = refresh_bible_from_story(state.bible, state.story)
         state.revisions += 1
         save_state(state.id, state.snapshot(), "reviewing", state.story.title)
 
     save_state(state.id, state.snapshot(), "completed", state.story.title if state.story else "")
     return state
+
+
+def refresh_bible_from_story(bible: StoryBible, story: Story) -> StoryBible:
+    """Conservative deterministic memory refresh.
+
+    The MVP stores generated scenes as timeline anchors rather than asking an LLM
+    to invent facts. A future milestone can replace this with a typed fact extractor.
+    """
+    timeline = list(bible.timeline)
+    for index, scene in enumerate(story.scenes, start=1):
+        marker = f"Scene {index}: {scene[:500].replace(chr(10), ' ')}"
+        if marker not in timeline:
+            timeline.append(marker)
+    return StoryBible(
+        characters=bible.characters,
+        locations=bible.locations,
+        rules=bible.rules,
+        timeline=timeline,
+        unresolved_threads=bible.unresolved_threads,
+    )
