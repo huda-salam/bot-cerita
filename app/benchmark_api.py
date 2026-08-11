@@ -3,6 +3,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from .visual_benchmark import create_case, start_run, score_run
 from .benchmark_persistence import save_case, save_run
+from .benchmark_runner import run_benchmark_case
 
 router = APIRouter()
 _CASES = {}
@@ -37,7 +38,13 @@ async def list_benchmark_cases():
 async def create_benchmark_run(request: BenchmarkRunRequest):
     case = _CASES.get(request.case_id)
     if not case: raise HTTPException(status_code=404, detail='Benchmark case not found')
-    run = start_run(case, request.provider, request.model)
+    try:
+        run = start_run(case, request.provider, request.model)
+        run = run.__class__(run.id, run.case_id, run.provider, run.model, await run_benchmark_case(case, request.provider, request.model), run.scores, run.created_at)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f'Image provider execution failed: {exc}') from exc
     _RUNS[run.id] = run
     save_run(run)
     return run
