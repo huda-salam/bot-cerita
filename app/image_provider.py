@@ -32,7 +32,7 @@ class MockImageProvider:
         return ImageGenerationResult(provider=self.name, model=request.model or "mock-v1", status="accepted", metadata={"prompt_context": request.context.prompt_context(), "note": "No external image model called."})
 
 class ImageProviderRegistry:
-    def __init__(self): self._providers = {}
+    def __init__(self): self._providers: dict[str, ImageProvider] = {}
     def register(self, provider: ImageProvider): self._providers[provider.name] = provider
     def get(self, name: str) -> ImageProvider:
         if name not in self._providers: raise KeyError(f"Image provider not registered: {name}")
@@ -41,3 +41,8 @@ class ImageProviderRegistry:
 
 registry = ImageProviderRegistry()
 registry.register(MockImageProvider())
+try:
+    from .image_provider_http import OpenAICompatibleImageProvider
+    registry.register(OpenAICompatibleImageProvider())
+except Exception:
+    pass
