@@ -6,14 +6,16 @@ from .asset_api import router as asset_router
 from .world_api import router as world_router
 from .visual_api import router as visual_router
 from .storyboard_api import router as storyboard_router
+from .studio_api import router as studio_router
 from .context_engine import build_context_pack
 from pydantic import BaseModel, Field
 
-app = FastAPI(title="Bot Cerita", version="1.0.0")
+app = FastAPI(title="Bot Cerita", version="1.5.0")
 app.include_router(asset_router)
 app.include_router(world_router)
 app.include_router(visual_router)
 app.include_router(storyboard_router)
+app.include_router(studio_router)
 
 class ContextRequest(BaseModel):
     query: str
@@ -21,11 +23,10 @@ class ContextRequest(BaseModel):
     max_items: int = Field(default=40, ge=1, le=200)
 
 @app.on_event("startup")
-def startup() -> None:
-    init_db()
+def startup() -> None: init_db()
 
 @app.get("/health")
-async def health(): return {"status": "ok", "version": "1.0.0"}
+async def health(): return {"status": "ok", "version": "1.5.0"}
 
 @app.get("/universes", response_model=list[Universe])
 async def get_universes(): return list_universes()
