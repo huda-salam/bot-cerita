@@ -16,12 +16,27 @@ Request
 
 The orchestrator owns workflow and state. LLM agents are specialized workers. Structured JSON is validated with Pydantic.
 
+## LLM strategy
+
+Anthropic is the default provider. The routing is intentionally asymmetric:
+
+- **Director:** Claude Haiku 4.5 — fast and inexpensive for specification extraction.
+- **Planner:** Claude Opus 4.8 — deepest reasoning for plot architecture and difficult story decisions.
+- **Writer:** Claude Sonnet 5 — primary creative writing model; best balance of quality, speed, and cost.
+- **Critic:** Claude Sonnet 5 — strong independent editorial evaluation without paying Opus prices on every pass.
+- **Rewriter:** Claude Sonnet 5 — high-quality revision while preserving cost efficiency.
+
+OpenRouter remains supported as an optional provider for experimentation with other models.
+
+> Important: a Claude.ai Pro/Max subscription and Anthropic API billing are separate concepts for application runtime. Claude Pro/Max can authenticate Claude Code, while this FastAPI application needs an Anthropic API key (or OpenRouter key) to make programmatic model calls.
+
 ## Stack
 
 - Python 3.11+
 - FastAPI
 - Pydantic
-- OpenRouter
+- Anthropic Messages API (default)
+- OpenRouter (optional)
 - SQLite-ready configuration
 
 ## Run locally
@@ -35,11 +50,11 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Copy `.env.example` to `.env` and put your OpenRouter key in it:
+Copy `.env.example` to `.env` and configure Anthropic:
 
 ```env
-OPENROUTER_API_KEY=...
-DEFAULT_MODEL=your/model
+LLM_PROVIDER=anthropic
+ANTHROPIC_API_KEY=...
 ```
 
 Start:
@@ -61,6 +76,18 @@ Generate a story with `POST /stories`:
   "language": "Indonesian",
   "length": "medium"
 }
+```
+
+## Model routing
+
+The model names live in `.env`, so changing providers/models does not require changing agent code.
+
+```env
+DIRECTOR_MODEL=claude-haiku-4-5
+PLANNER_MODEL=claude-opus-4-8
+WRITER_MODEL=claude-sonnet-5
+CRITIC_MODEL=claude-sonnet-5
+REWRITER_MODEL=claude-sonnet-5
 ```
 
 ## Next milestones
