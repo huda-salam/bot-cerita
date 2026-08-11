@@ -49,6 +49,12 @@ def add_scene(project_id, scene_number, title="", summary=""):
     with sqlite3.connect(_db_path()) as db: db.execute("INSERT INTO story_scenes VALUES (?,?,?,?,?,?,?,?)",tuple(item.values())); db.commit()
     return item
 
+def get_scene(scene_id):
+    init_studio_tables()
+    with sqlite3.connect(_db_path()) as db: row=db.execute("SELECT id,project_id,scene_number,title,summary,status FROM story_scenes WHERE id=?",(scene_id,)).fetchone()
+    if not row:return None
+    keys=["id","project_id","scene_number","title","summary","status"]; return dict(zip(keys,row))
+
 def list_scenes(project_id):
     init_studio_tables()
     with sqlite3.connect(_db_path()) as db: rows=db.execute("SELECT id,project_id,scene_number,title,summary,status,created_at,updated_at FROM story_scenes WHERE project_id=? ORDER BY scene_number",(project_id,)).fetchall()
@@ -68,8 +74,7 @@ def get_panel(panel_id):
 def set_panel_references(panel_id, references):
     init_studio_tables()
     with sqlite3.connect(_db_path()) as db:
-        db.execute("DELETE FROM panel_reference_assets WHERE panel_id=?",(panel_id,))
-        db.executemany("INSERT INTO panel_reference_assets(panel_id,asset_id,character_id,selection_reason) VALUES (?,?,?,?)",[(panel_id,r["asset_id"],r["character_id"],r.get("reason", "manual selection")) for r in references]); db.commit()
+        db.execute("DELETE FROM panel_reference_assets WHERE panel_id=?",(panel_id,)); db.executemany("INSERT INTO panel_reference_assets(panel_id,asset_id,character_id,selection_reason) VALUES (?,?,?,?)",[(panel_id,r["asset_id"],r["character_id"],r.get("reason", "manual selection")) for r in references]); db.commit()
     return list_panel_references(panel_id)
 
 def list_panel_references(panel_id):
