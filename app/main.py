@@ -5,8 +5,10 @@ from .persistence import (
     init_db, create_universe, list_universes, get_universe,
     create_character, list_characters, create_canon_entry, list_canon_entries,
 )
+from .asset_api import router as asset_router
 
-app = FastAPI(title="Bot Cerita", version="0.5.0")
+app = FastAPI(title="Bot Cerita", version="0.6.0")
+app.include_router(asset_router)
 
 
 @app.on_event("startup")
@@ -16,7 +18,7 @@ def startup() -> None:
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": "0.5.0"}
+    return {"status": "ok", "version": "0.6.0"}
 
 
 @app.get("/universes", response_model=list[Universe])
