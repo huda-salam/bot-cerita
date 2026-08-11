@@ -55,6 +55,10 @@ def get_scene(scene_id):
     if not row:return None
     keys=["id","project_id","scene_number","title","summary","status"]; return dict(zip(keys,row))
 
+def get_scene_project_id(scene_id):
+    scene=get_scene(scene_id)
+    return scene["project_id"] if scene else None
+
 def list_scenes(project_id):
     init_studio_tables()
     with sqlite3.connect(_db_path()) as db: rows=db.execute("SELECT id,project_id,scene_number,title,summary,status,created_at,updated_at FROM story_scenes WHERE project_id=? ORDER BY scene_number",(project_id,)).fetchall()
