@@ -10,8 +10,30 @@ class Character(BaseModel):
     appearance: str = ""
 
 
+class Universe(BaseModel):
+    id: str
+    name: str
+    description: str = ""
+    canon_version: int = 1
+
+
+class UniverseCreate(BaseModel):
+    name: str
+    description: str = ""
+
+
+class CharacterCreate(BaseModel):
+    name: str
+    role: str = "supporting"
+    traits: list[str] = Field(default_factory=list)
+    description: str = ""
+    appearance: str = ""
+
+
 class StoryRequest(BaseModel):
     idea: str
+    universe_id: str | None = None
+    character_ids: list[str] = Field(default_factory=list)
     target_age: str = "7-10"
     genre: str = "fantasy"
     tone: list[str] = Field(default_factory=lambda: ["warm", "funny", "adventurous"])
@@ -48,6 +70,7 @@ class StorySpec(BaseModel):
     conflict: str
     ending_direction: str
     expert_guidance: str = ""
+    universe_context: str = ""
 
 
 class Scene(BaseModel):
