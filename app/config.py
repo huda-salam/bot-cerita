@@ -1,17 +1,31 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+
 class Settings(BaseSettings):
-    openrouter_api_key: str
+    # Provider: anthropic (recommended) or openrouter
+    llm_provider: str = "anthropic"
+
+    # Anthropic direct API
+    anthropic_api_key: str = ""
+    anthropic_base_url: str = "https://api.anthropic.com"
+
+    # OpenRouter fallback / multi-model gateway
+    openrouter_api_key: str = ""
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
-    default_model: str = "openai/gpt-4o-mini"
-    director_model: str = ""
-    planner_model: str = ""
-    writer_model: str = ""
-    critic_model: str = ""
-    rewriter_model: str = ""
+
+    # Current Anthropic model defaults (2026-08)
+    default_model: str = "claude-sonnet-5"
+    director_model: str = "claude-haiku-4-5"
+    planner_model: str = "claude-opus-4-8"
+    writer_model: str = "claude-sonnet-5"
+    critic_model: str = "claude-sonnet-5"
+    rewriter_model: str = "claude-sonnet-5"
+
     critic_threshold: int = 80
     max_revisions: int = 2
     database_url: str = "sqlite:///./bot_cerita.db"
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
 
 settings = Settings()
