@@ -17,6 +17,23 @@ class StoryRequest(BaseModel):
     tone: list[str] = Field(default_factory=lambda: ["warm", "funny", "adventurous"])
     language: str = "Indonesian"
     length: Literal["short", "medium", "long"] = "medium"
+    what_if_count: int = Field(default=5, ge=0, le=10)
+
+
+class WhatIfCandidate(BaseModel):
+    title: str
+    premise: str
+    hook: str
+    conflict: str
+    novelty_score: int = Field(ge=0, le=100)
+    emotional_score: int = Field(ge=0, le=100)
+    age_fit_score: int = Field(ge=0, le=100)
+    overall_score: int = Field(ge=0, le=100)
+
+
+class WhatIfResult(BaseModel):
+    candidates: list[WhatIfCandidate]
+    recommended_index: int = Field(ge=0)
 
 
 class StorySpec(BaseModel):
@@ -30,6 +47,7 @@ class StorySpec(BaseModel):
     characters: list[Character]
     conflict: str
     ending_direction: str
+    expert_guidance: str = ""
 
 
 class Scene(BaseModel):
@@ -55,6 +73,18 @@ class StoryBible(BaseModel):
     rules: list[str] = Field(default_factory=list)
     timeline: list[str] = Field(default_factory=list)
     unresolved_threads: list[str] = Field(default_factory=list)
+
+
+class ExpertReview(BaseModel):
+    expert: str
+    score: int = Field(ge=0, le=100)
+    strengths: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    recommendations: list[str] = Field(default_factory=list)
+
+
+class ExpertPanel(BaseModel):
+    reviews: list[ExpertReview] = Field(default_factory=list)
 
 
 class Critique(BaseModel):
