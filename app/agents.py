@@ -16,9 +16,9 @@ def dynamic_skills(req: StoryRequest) -> str:
     return build_dynamic_skill_context(req.genre, req.target_age, req.tone)
 
 
-async def director(req: StoryRequest, what_if_context: str = ""):
+async def director(req: StoryRequest, what_if_context: str = "", universe_context: str = ""):
     system = prompt("director") + "\n\nDYNAMIC SPECIALIST SKILLS:\n" + dynamic_skills(req)
-    user = f"REQUEST:\n{req.model_dump_json()}\n\nWHAT-IF OPTIONS:\n{what_if_context}"
+    user = f"REQUEST:\n{req.model_dump_json()}\n\nUNIVERSE CANON:\n{universe_context}\n\nWHAT-IF OPTIONS:\n{what_if_context}"
     return await llm.generate(system, user, StorySpec, settings.director_model)
 
 
@@ -29,17 +29,17 @@ async def planner(spec: StorySpec):
 
 async def writer(spec: StorySpec, outline: StoryOutline, bible: str = "", expert_guidance: str = ""):
     system = prompt("writer") + "\n\nSPECIALIST SKILLS:\n" + build_skill_context("children_literature", "dialogue", "plot")
-    user = f"SPEC:\n{spec.model_dump_json()}\nOUTLINE:\n{outline.model_dump_json()}\nSTORY BIBLE:\n{bible}\nEXPERT GUIDANCE:\n{expert_guidance}"
+    user = f"SPEC:\n{spec.model_dump_json()}\nOUTLINE:\n{outline.model_dump_json()}\nSTORY BIBLE:\n{bible}\nEXPERT GUIDANCE:\n{expert_guidance}\nUNIVERSE CANON:\n{spec.universe_context}"
     return await llm.generate(system, user, Story, settings.writer_model)
 
 
 async def critic(spec: StorySpec, outline: StoryOutline, story: Story, bible: str = "", expert_guidance: str = ""):
     system = prompt("critic") + "\n\nSPECIALIST SKILLS:\n" + build_skill_context("children_literature", "plot")
-    user = f"SPEC:\n{spec.model_dump_json()}\nOUTLINE:\n{outline.model_dump_json()}\nSTORY BIBLE:\n{bible}\nEXPERT GUIDANCE:\n{expert_guidance}\nSTORY:\n{story.model_dump_json()}"
+    user = f"SPEC:\n{spec.model_dump_json()}\nOUTLINE:\n{outline.model_dump_json()}\nSTORY BIBLE:\n{bible}\nEXPERT GUIDANCE:\n{expert_guidance}\nUNIVERSE CANON:\n{spec.universe_context}\nSTORY:\n{story.model_dump_json()}"
     return await llm.generate(system, user, Critique, settings.critic_model)
 
 
 async def rewriter(spec: StorySpec, story: Story, critique: Critique, bible: str = "", expert_guidance: str = ""):
     system = prompt("rewriter") + "\n\nSPECIALIST SKILLS:\n" + build_skill_context("children_literature", "dialogue", "plot")
-    user = f"SPEC:\n{spec.model_dump_json()}\nSTORY BIBLE:\n{bible}\nEXPERT GUIDANCE:\n{expert_guidance}\nSTORY:\n{story.model_dump_json()}\nCRITIQUE:\n{critique.model_dump_json()}"
+    user = f"SPEC:\n{spec.model_dump_json()}\nSTORY BIBLE:\n{bible}\nEXPERT GUIDANCE:\n{expert_guidance}\nUNIVERSE CANON:\n{spec.universe_context}\nSTORY:\n{story.model_dump_json()}\nCRITIQUE:\n{critique.model_dump_json()}"
     return await llm.generate(system, user, Story, settings.rewriter_model)
