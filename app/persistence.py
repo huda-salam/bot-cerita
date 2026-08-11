@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 from .config import settings
-from .models import Universe, UniverseCreate, Character, CharacterCreate
+from .models import Universe, UniverseCreate, Character, CharacterCreate, CanonEntry, CanonEntryCreate
 
 
 def _db_path() -> str:
@@ -12,7 +12,6 @@ def _db_path() -> str:
     if url.startswith("sqlite:///"):
         return url.removeprefix("sqlite:///")
     return "bot_cerita.db"
-
 
 DB_PATH = Path(_db_path())
 
@@ -45,6 +44,13 @@ def init_db() -> None:
                 FOREIGN KEY(universe_id) REFERENCES universes(id)
             );
             CREATE INDEX IF NOT EXISTS idx_characters_universe ON characters(universe_id);
+            CREATE TABLE IF NOT EXISTS canon_entries (
+                id TEXT PRIMARY KEY, universe_id TEXT NOT NULL, category TEXT NOT NULL,
+                content TEXT NOT NULL, authority TEXT NOT NULL DEFAULT 'established',
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                FOREIGN KEY(universe_id) REFERENCES universes(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_canon_universe ON canon_entries(universe_id);
         """)
 
 
@@ -54,8 +60,7 @@ def save_state(story_id: str, state: dict, status: str, title: str = "") -> None
         db.execute("""INSERT INTO stories(id,title,status,request_json,state_json,created_at,updated_at)
            VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,status=excluded.status,
            state_json=excluded.state_json,updated_at=excluded.updated_at""",
-           (story_id, title, status, json.dumps(state.get("request", {}), ensure_ascii=False),
-            json.dumps(state, ensure_ascii=False), now, now))
+           (story_id, title, status, json.dumps(state.get("request", {}), ensure_ascii=False), json.dumps(state, ensure_ascii=False), now, now))
         db.commit()
 
 
@@ -95,15 +100,12 @@ def get_universe(universe_id: str) -> Universe | None:
 def create_character(universe_id: str, data: CharacterCreate) -> tuple[str, Character] | None:
     if not get_universe(universe_id):
         return None
-    character = Character(name=data.name, role=data.role, traits=data.traits,
-                          description=data.description, appearance=data.appearance)
+    character = Character(name=data.name, role=data.role, traits=data.traits, description=data.description, appearance=data.appearance)
     character_id = str(uuid4())
     now = datetime.now(timezone.utc).isoformat()
     with sqlite3.connect(DB_PATH) as db:
         db.execute("INSERT INTO characters(id,universe_id,name,role,traits_json,description,appearance,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
-                   (character_id, universe_id, character.name, character.role,
-                    json.dumps(character.traits, ensure_ascii=False), character.description,
-                    character.appearance, now, now))
+                   (character_id, universe_id, character.name, character.role, json.dumps(character.traits, ensure_ascii=False), character.description, character.appearance, now, now))
         db.commit()
     return character_id, character
 
@@ -113,3 +115,22 @@ def list_characters(universe_id: str) -> list[tuple[str, Character]]:
     with sqlite3.connect(DB_PATH) as db:
         rows = db.execute("SELECT id,name,role,traits_json,description,appearance FROM characters WHERE universe_id=? ORDER BY name", (universe_id,)).fetchall()
     return [(r[0], Character(name=r[1], role=r[2], traits=json.loads(r[3]), description=r[4], appearance=r[5])) for r in rows]
+
+
+def create_canon_entry(universe_id: str, data: CanonEntryCreate) -> CanonEntry | None:
+    if not get_universe(universe_id):
+        return None
+    entry = CanonEntry(id=str(uuid4()), category=data.category, content=data.content, authority=data.authority)
+    now = datetime.now(timezone.utc).isoformat()
+    with sqlite3.connect(DB_PATH) as db:
+        db.execute("INSERT INTO canon_entries(id,universe_id,category,content,authority,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+                   (entry.id, universe_id, entry.category, entry.content, entry.authority, now, now))
+        db.commit()
+    return entry
+
+
+def list_canon_entries(universe_id: str) -> list[CanonEntry]:
+    init_db()
+    with sqlite3.connect(DB_PATH) as db:
+        rows = db.execute("SELECT id,category,content,authority FROM canon_entries WHERE universe_id=? ORDER BY category,id", (universe_id,)).fetchall()
+    return [CanonEntry(id=r[0], category=r[1], content=r[2], authority=r[3]) for r in rows]
