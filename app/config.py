@@ -2,21 +2,19 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    # Provider: anthropic (recommended) or openrouter
+    # Provider: anthropic or openrouter
     llm_provider: str = "anthropic"
 
-    # Anthropic direct API
     anthropic_api_key: str = ""
     anthropic_base_url: str = "https://api.anthropic.com"
 
-    # OpenRouter fallback / multi-model gateway
     openrouter_api_key: str = ""
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
 
-    # Current Anthropic model defaults (2026-08)
+    # Recommended 2026 routing: cheap director, deep planner, strong writer/editor.
     default_model: str = "claude-sonnet-5"
     director_model: str = "claude-haiku-4-5"
-    planner_model: str = "claude-opus-4-8"
+    planner_model: str = "claude-opus-5"
     writer_model: str = "claude-sonnet-5"
     critic_model: str = "claude-sonnet-5"
     rewriter_model: str = "claude-sonnet-5"
