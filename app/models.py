@@ -30,6 +30,19 @@ class CharacterCreate(BaseModel):
     appearance: str = ""
 
 
+class CanonEntry(BaseModel):
+    id: str
+    category: str
+    content: str
+    authority: Literal["official", "established", "provisional", "non_canon"] = "established"
+
+
+class CanonEntryCreate(BaseModel):
+    category: str
+    content: str
+    authority: Literal["official", "established", "provisional", "non_canon"] = "established"
+
+
 class StoryRequest(BaseModel):
     idea: str
     universe_id: str | None = None
