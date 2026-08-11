@@ -7,13 +7,14 @@ from .world_api import router as world_router
 from .visual_api import router as visual_router
 from .storyboard_api import router as storyboard_router
 from .studio_api import router as studio_router
+from .image_provider_api import router as image_provider_router
 from .context_engine import build_context_pack
 from .studio_persistence import init_studio_tables
 from .story_workflow import create_story_from_idea
 from pydantic import BaseModel, Field
 
-app = FastAPI(title="Bot Cerita", version="1.9.0")
-app.include_router(asset_router); app.include_router(world_router); app.include_router(visual_router); app.include_router(storyboard_router); app.include_router(studio_router)
+app = FastAPI(title="Bot Cerita", version="2.5.0")
+app.include_router(asset_router); app.include_router(world_router); app.include_router(visual_router); app.include_router(storyboard_router); app.include_router(studio_router); app.include_router(image_provider_router)
 
 class ContextRequest(BaseModel):
     query: str
@@ -25,7 +26,7 @@ def startup() -> None:
     init_db(); init_studio_tables()
 
 @app.get("/health")
-async def health(): return {"status":"ok","version":"1.9.0"}
+async def health(): return {"status":"ok","version":"2.5.0"}
 @app.get("/universes", response_model=list[Universe])
 async def get_universes(): return list_universes()
 @app.post("/universes", response_model=Universe)
