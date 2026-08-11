@@ -1,7 +1,10 @@
 from fastapi import FastAPI, HTTPException
-from .models import StoryRequest, StoryResponse, Universe, UniverseCreate, Character, CharacterCreate
+from .models import StoryRequest, StoryResponse, Universe, UniverseCreate, CharacterCreate, CanonEntry, CanonEntryCreate
 from .orchestrator import run_story
-from .persistence import init_db, create_universe, list_universes, get_universe, create_character, list_characters
+from .persistence import (
+    init_db, create_universe, list_universes, get_universe,
+    create_character, list_characters, create_canon_entry, list_canon_entries,
+)
 
 app = FastAPI(title="Bot Cerita", version="0.5.0")
 
@@ -51,6 +54,21 @@ async def post_character(universe_id: str, request: CharacterCreate):
         raise HTTPException(status_code=404, detail="Universe not found")
     character_id, character = result
     return {"id": character_id, **character.model_dump(mode="json")}
+
+
+@app.get("/universes/{universe_id}/canon", response_model=list[CanonEntry])
+async def get_canon(universe_id: str):
+    if not get_universe(universe_id):
+        raise HTTPException(status_code=404, detail="Universe not found")
+    return list_canon_entries(universe_id)
+
+
+@app.post("/universes/{universe_id}/canon", response_model=CanonEntry)
+async def post_canon(universe_id: str, request: CanonEntryCreate):
+    entry = create_canon_entry(universe_id, request)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Universe not found")
+    return entry
 
 
 @app.post("/stories", response_model=StoryResponse)
