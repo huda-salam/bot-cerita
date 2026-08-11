@@ -9,9 +9,10 @@ from .storyboard_api import router as storyboard_router
 from .studio_api import router as studio_router
 from .context_engine import build_context_pack
 from .studio_persistence import init_studio_tables
+from .story_workflow import create_story_from_idea
 from pydantic import BaseModel, Field
 
-app = FastAPI(title="Bot Cerita", version="1.7.0")
+app = FastAPI(title="Bot Cerita", version="1.9.0")
 app.include_router(asset_router); app.include_router(world_router); app.include_router(visual_router); app.include_router(storyboard_router); app.include_router(studio_router)
 
 class ContextRequest(BaseModel):
@@ -24,7 +25,7 @@ def startup() -> None:
     init_db(); init_studio_tables()
 
 @app.get("/health")
-async def health(): return {"status":"ok","version":"1.7.0"}
+async def health(): return {"status":"ok","version":"1.9.0"}
 @app.get("/universes", response_model=list[Universe])
 async def get_universes(): return list_universes()
 @app.post("/universes", response_model=Universe)
@@ -63,7 +64,7 @@ async def resolve_context(universe_id: str, request: ContextRequest):
 @app.post("/stories", response_model=StoryResponse)
 async def create_story(request: StoryRequest):
     try:
-        state=await run_story(request); text="\n\n".join(state.story.scenes)
-        return StoryResponse(id=state.id,title=state.story.title,story=text,score=state.critique.overall_score if state.critique else 0,revisions=state.revisions)
+        result=await create_story_from_idea(request)
+        return StoryResponse(id=result.story_id,title=result.title,story=result.story,score=result.score,revisions=result.revisions)
     except ValueError as exc: raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc: raise HTTPException(status_code=502, detail=str(exc)) from exc
