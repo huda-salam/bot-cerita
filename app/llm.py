@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 import json
+from abc import ABC, abstractmethod
 import httpx
 from pydantic import BaseModel
 from .config import settings
@@ -8,97 +11,81 @@ class LLMError(RuntimeError):
     pass
 
 
-class LLM:
-    """Small provider abstraction used by the orchestrator.
+class LLMDriver(ABC):
+    name: str
 
-    Anthropic is the default provider. OpenRouter remains available as a
-    fallback for experiments with other models.
-    """
-
-    async def generate(
-        self,
-        system: str,
-        user: str,
-        schema: type[BaseModel],
-        model: str = "",
-    ) -> BaseModel:
-        chosen = model or settings.default_model
-        if settings.llm_provider.lower() == "anthropic":
-            return await self._anthropic(system, user, schema, chosen)
-        return await self._openrouter(system, user, schema, chosen)
-
-    async def _anthropic(self, system, user, schema, model):
-        if not settings.anthropic_api_key:
-            raise LLMError(
-                "ANTHROPIC_API_KEY is not configured. A Claude.ai Pro/Max subscription "
-                "is useful for Claude/Claude Code, but the application needs Anthropic "
-                "API access (or set LLM_PROVIDER=openrouter)."
-            )
-
-        url = settings.anthropic_base_url.rstrip("/") + "/v1/messages"
-        headers = {
-            "x-api-key": settings.anthropic_api_key,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-        }
-        payload = {
-            "model": model,
-            "max_tokens": 8192,
-            "system": system,
-            "messages": [{"role": "user", "content": user}],
-        }
-
-        async with httpx.AsyncClient(timeout=180) as client:
-            response = await client.post(url, headers=headers, json=payload)
-
-        if response.status_code >= 400:
-            raise LLMError(f"Anthropic error {response.status_code}: {response.text[:1000]}")
-
-        data = response.json()
-        content = "".join(
-            block.get("text", "")
-            for block in data.get("content", [])
-            if block.get("type") == "text"
-        )
-        return self._parse(content, schema)
-
-    async def _openrouter(self, system, user, schema, model):
-        if not settings.openrouter_api_key:
-            raise LLMError("OPENROUTER_API_KEY is not configured")
-
-        url = settings.openrouter_base_url.rstrip("/") + "/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {settings.openrouter_api_key}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": "http://localhost:8000",
-            "X-Title": "Bot Cerita",
-        }
-        payload = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            "response_format": {"type": "json_object"},
-        }
-
-        async with httpx.AsyncClient(timeout=180) as client:
-            response = await client.post(url, headers=headers, json=payload)
-
-        if response.status_code >= 400:
-            raise LLMError(f"OpenRouter error {response.status_code}: {response.text[:1000]}")
-
-        content = response.json()["choices"][0]["message"]["content"]
-        return self._parse(content, schema)
+    @abstractmethod
+    async def generate(self, system: str, user: str, schema: type[BaseModel], model: str) -> BaseModel:
+        raise NotImplementedError
 
     @staticmethod
-    def _parse(content: str, schema: type[BaseModel]) -> BaseModel:
+    def parse(content: str, schema: type[BaseModel]) -> BaseModel:
         try:
             return schema.model_validate(json.loads(content))
         except Exception as exc:
-            raise LLMError(
-                f"Invalid structured output: {exc}; raw={content[:2000]}"
-            ) from exc
+            raise LLMError(f"Invalid structured output: {exc}; raw={content[:2000]}") from exc
 
 
-llm = LLM()
+class AnthropicDriver(LLMDriver):
+    name = "anthropic"
+
+    async def generate(self, system, user, schema, model):
+        if not settings.anthropic_api_key:
+            raise LLMError("ANTHROPIC_API_KEY is not configured")
+        payload = {"model": model, "max_tokens": settings.max_tokens, "system": system + "\n\nReturn ONLY valid JSON matching the requested schema.", "messages": [{"role": "user", "content": user}]}
+        headers = {"x-api-key": settings.anthropic_api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"}
+        async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
+            response = await client.post(settings.anthropic_base_url.rstrip("/") + "/v1/messages", headers=headers, json=payload)
+        if response.status_code >= 400:
+            raise LLMError(f"Anthropic error {response.status_code}: {response.text[:1000]}")
+        data = response.json()
+        content = "".join(block.get("text", "") for block in data.get("content", []) if block.get("type") == "text")
+        return self.parse(content, schema)
+
+
+class OpenAICompatibleDriver(LLMDriver):
+    """OpenRouter or any OpenAI-compatible endpoint, including Ollama."""
+
+    def __init__(self, name: str):
+        self.name = name
+
+    async def generate(self, system, user, schema, model):
+        api_key = settings.openrouter_api_key if self.name == "openrouter" else settings.local_llm_api_key
+        if not api_key and self.name != "ollama":
+            raise LLMError(f"API key is not configured for {self.name}")
+        headers = {"Content-Type": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        base_url = settings.openrouter_base_url if self.name == "openrouter" else settings.local_llm_base_url
+        payload = {"model": model, "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}], "response_format": {"type": "json_object"}}
+        async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
+            response = await client.post(base_url.rstrip("/") + "/chat/completions", headers=headers, json=payload)
+        if response.status_code >= 400:
+            raise LLMError(f"{self.name} error {response.status_code}: {response.text[:1000]}")
+        content = response.json()["choices"][0]["message"]["content"]
+        return self.parse(content, schema)
+
+
+class ModelRouter:
+    def __init__(self):
+        self.drivers = {"anthropic": AnthropicDriver(), "openrouter": OpenAICompatibleDriver("openrouter"), "ollama": OpenAICompatibleDriver("ollama")}
+
+    def resolve(self, model: str):
+        alias = settings.model_aliases.get(model)
+        if alias:
+            provider, provider_model = alias.split(":", 1)
+            if provider not in self.drivers:
+                raise LLMError(f"Unknown LLM provider: {provider}")
+            return self.drivers[provider], provider_model
+        if model.startswith("openrouter/"):
+            return self.drivers["openrouter"], model.removeprefix("openrouter/")
+        if model.startswith("ollama/"):
+            return self.drivers["ollama"], model.removeprefix("ollama/")
+        return self.drivers[settings.llm_provider], model
+
+    async def generate(self, system, user, schema, model):
+        driver, provider_model = self.resolve(model)
+        return await driver.generate(system, user, schema, provider_model)
+
+
+llm = ModelRouter()
