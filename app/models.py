@@ -1,5 +1,5 @@
-from typing import Literal
-from pydantic import BaseModel, Field
+from typing import Any, Literal
+from pydantic import BaseModel, Field, model_validator
 
 
 class Character(BaseModel):
@@ -55,20 +55,56 @@ class StoryRequest(BaseModel):
     what_if_count: int = Field(default=5, ge=0, le=10)
 
 
+class WhatIfScores(BaseModel):
+    novelty: float = 0
+    emotional_potential: float = 0
+    age_fit: float = 0
+    overall: float = 0
+
+
 class WhatIfCandidate(BaseModel):
+    id: str = ""
     title: str
     premise: str
-    hook: str
-    conflict: str
-    novelty_score: int = Field(ge=0, le=100)
-    emotional_score: int = Field(ge=0, le=100)
-    age_fit_score: int = Field(ge=0, le=100)
-    overall_score: int = Field(ge=0, le=100)
+    hook: str = ""
+    protagonist_goal: str = ""
+    conflict: str = ""
+    obstacle: str = ""
+    twist: str = ""
+    emotional_engine: str = ""
+    scores: WhatIfScores = Field(default_factory=WhatIfScores)
+    recommended: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_model_output(cls, value: Any):
+        if not isinstance(value, dict):
+            return value
+        value = dict(value)
+        if not value.get("conflict") and value.get("obstacle"):
+            value["conflict"] = value["obstacle"]
+        if "scores" not in value:
+            value["scores"] = {
+                "novelty": value.pop("novelty_score", 0),
+                "emotional_potential": value.pop("emotional_score", 0),
+                "age_fit": value.pop("age_fit_score", 0),
+                "overall": value.pop("overall_score", 0),
+            }
+        return value
 
 
 class WhatIfResult(BaseModel):
-    candidates: list[WhatIfCandidate]
-    recommended_index: int = Field(ge=0)
+    candidates: list[WhatIfCandidate] = Field(default_factory=list)
+    recommended_index: int = 0
+
+    @model_validator(mode="after")
+    def infer_recommended_index(self):
+        marked = [i for i, candidate in enumerate(self.candidates) if candidate.recommended]
+        if marked:
+            self.recommended_index = marked[0]
+        elif self.candidates and not (0 <= self.recommended_index < len(self.candidates)):
+            self.recommended_index = 0
+        return self
 
 
 class StorySpec(BaseModel):
