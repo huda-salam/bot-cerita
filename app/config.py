@@ -9,6 +9,8 @@ class Settings(BaseSettings):
     anthropic_base_url: str = "https://api.anthropic.com"
     openrouter_api_key: str = ""
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    # auto = use OpenRouter model capabilities; enabled = force JSON Schema; disabled = prompt+parser fallback.
+    openrouter_structured_outputs: str = "auto"
     local_llm_api_key: str = ""
     local_llm_base_url: str = "http://localhost:11434/v1"
 
