@@ -49,6 +49,25 @@ class OpenAICompatibleDriver(LLMDriver):
     def __init__(self, name: str):
         self.name = name
 
+    @staticmethod
+    def _extract_content(data: dict) -> str:
+        choices = data.get("choices")
+        if not choices:
+            error = data.get("error")
+            if error:
+                raise LLMError(f"OpenAI-compatible error: {json.dumps(error, ensure_ascii=False)[:2000]}")
+            raise LLMError(f"OpenAI-compatible response missing 'choices': {json.dumps(data, ensure_ascii=False)[:3000]}")
+        message = choices[0].get("message") or {}
+        content = message.get("content")
+        if isinstance(content, list):
+            content = "".join(
+                part.get("text", "") if isinstance(part, dict) else str(part)
+                for part in content
+            )
+        if not content:
+            raise LLMError(f"OpenAI-compatible response has empty message content: {json.dumps(data, ensure_ascii=False)[:3000]}")
+        return content
+
     async def generate(self, system, user, schema, model):
         api_key = settings.openrouter_api_key if self.name == "openrouter" else settings.local_llm_api_key
         if not api_key and self.name != "ollama":
@@ -56,13 +75,20 @@ class OpenAICompatibleDriver(LLMDriver):
         headers = {"Content-Type": "application/json"}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
+        if self.name == "openrouter":
+            headers["HTTP-Referer"] = "https://github.com/huda-salam/bot-cerita"
+            headers["X-Title"] = "Bot Cerita"
         base_url = settings.openrouter_base_url if self.name == "openrouter" else settings.local_llm_base_url
-        payload = {"model": model, "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}], "response_format": {"type": "json_object"}}
+        payload = {"model": model, "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}], "response_format": {"type": "json_object"}, "max_tokens": settings.max_tokens}
         async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
             response = await client.post(base_url.rstrip("/") + "/chat/completions", headers=headers, json=payload)
         if response.status_code >= 400:
-            raise LLMError(f"{self.name} error {response.status_code}: {response.text[:1000]}")
-        content = response.json()["choices"][0]["message"]["content"]
+            raise LLMError(f"{self.name} error {response.status_code}: {response.text[:2000]}")
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise LLMError(f"{self.name} returned non-JSON HTTP {response.status_code}: {response.text[:2000]}") from exc
+        content = self._extract_content(data)
         return self.parse(content, schema)
 
 
