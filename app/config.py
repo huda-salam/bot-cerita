@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     # "story-expert": "anthropic:claude-sonnet-5",
     # "story-ideas": "anthropic:claude-sonnet-5",
 
+    # LLM debugging. Disabled by default; enable locally when diagnosing provider/model issues.
+    llm_debug: bool = False
+    llm_log_dir: str = "logs/llm"
+
     max_tokens: int = 8192
     llm_timeout_seconds: float = 180.0
     critic_threshold: int = 80
