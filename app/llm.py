@@ -20,10 +20,17 @@ class LLMDriver(ABC):
 
     @staticmethod
     def parse(content: str, schema: type[BaseModel]) -> BaseModel:
+        cleaned = content.strip()
+        if cleaned.startswith("```json"):
+            cleaned = cleaned[7:]
+        elif cleaned.startswith("```"):
+            cleaned = cleaned[3:]
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
         try:
-            return schema.model_validate(json.loads(content))
+            return schema.model_validate(json.loads(cleaned.strip()))
         except Exception as exc:
-            raise LLMError(f"Invalid structured output: {exc}; raw={content[:2000]}") from exc
+            raise LLMError(f"Invalid structured output: {exc}; raw={content[:3000]}") from exc
 
 
 class AnthropicDriver(LLMDriver):
@@ -37,7 +44,7 @@ class AnthropicDriver(LLMDriver):
         async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
             response = await client.post(settings.anthropic_base_url.rstrip("/") + "/v1/messages", headers=headers, json=payload)
         if response.status_code >= 400:
-            raise LLMError(f"Anthropic error {response.status_code}: {response.text[:1000]}")
+            raise LLMError(f"Anthropic error {response.status_code}: {response.text[:2000]}")
         data = response.json()
         content = "".join(block.get("text", "") for block in data.get("content", []) if block.get("type") == "text")
         return self.parse(content, schema)
@@ -55,15 +62,14 @@ class OpenAICompatibleDriver(LLMDriver):
         if not choices:
             error = data.get("error")
             if error:
-                raise LLMError(f"OpenAI-compatible error: {json.dumps(error, ensure_ascii=False)[:2000]}")
+                raise LLMError(f"OpenAI-compatible error: {json.dumps(error, ensure_ascii=False)[:3000]}")
             raise LLMError(f"OpenAI-compatible response missing 'choices': {json.dumps(data, ensure_ascii=False)[:3000]}")
         message = choices[0].get("message") or {}
         content = message.get("content")
         if isinstance(content, list):
-            content = "".join(
-                part.get("text", "") if isinstance(part, dict) else str(part)
-                for part in content
-            )
+            content = "".join(part.get("text", "") if isinstance(part, dict) else str(part) for part in content)
+        if not content and message.get("reasoning_content"):
+            raise LLMError("OpenAI-compatible model returned reasoning content but no final message content")
         if not content:
             raise LLMError(f"OpenAI-compatible response has empty message content: {json.dumps(data, ensure_ascii=False)[:3000]}")
         return content
@@ -79,15 +85,22 @@ class OpenAICompatibleDriver(LLMDriver):
             headers["HTTP-Referer"] = "https://github.com/huda-salam/bot-cerita"
             headers["X-Title"] = "Bot Cerita"
         base_url = settings.openrouter_base_url if self.name == "openrouter" else settings.local_llm_base_url
-        payload = {"model": model, "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}], "response_format": {"type": "json_object"}, "max_tokens": settings.max_tokens}
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system + "\n\nReturn ONLY valid JSON matching the requested schema. Do not use markdown fences."},
+                {"role": "user", "content": user},
+            ],
+            "max_tokens": settings.max_tokens,
+        }
         async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
             response = await client.post(base_url.rstrip("/") + "/chat/completions", headers=headers, json=payload)
         if response.status_code >= 400:
-            raise LLMError(f"{self.name} error {response.status_code}: {response.text[:2000]}")
+            raise LLMError(f"{self.name} error {response.status_code}: {response.text[:3000]}")
         try:
             data = response.json()
         except ValueError as exc:
-            raise LLMError(f"{self.name} returned non-JSON HTTP {response.status_code}: {response.text[:2000]}") from exc
+            raise LLMError(f"{self.name} returned non-JSON HTTP {response.status_code}: {response.text[:3000]}") from exc
         content = self._extract_content(data)
         return self.parse(content, schema)
 
