@@ -1,6 +1,5 @@
 from fastapi import FastAPI, HTTPException
 from .models import StoryRequest, StoryResponse, Universe, UniverseCreate, CharacterCreate, CanonEntry, CanonEntryCreate
-from .orchestrator import run_story
 from .persistence import init_db, create_universe, list_universes, get_universe, create_character, list_characters, create_canon_entry, list_canon_entries
 from .asset_api import router as asset_router
 from .world_api import router as world_router
@@ -12,14 +11,15 @@ from .benchmark_api import router as benchmark_router
 from .character_asset_api import router as character_asset_router
 from .reference_selector_api import router as reference_selector_router
 from .panel_reference_api import router as panel_reference_router
+from .vertical_slice_api import router as vertical_slice_router
 from .benchmark_persistence import init_benchmark_db
 from .context_engine import build_context_pack
 from .studio_persistence import init_studio_tables
 from .story_workflow import create_story_from_idea
 from pydantic import BaseModel, Field
 
-app=FastAPI(title="Bot Cerita",version="2.8.0")
-app.include_router(asset_router); app.include_router(world_router); app.include_router(visual_router); app.include_router(storyboard_router); app.include_router(studio_router); app.include_router(image_provider_router); app.include_router(benchmark_router); app.include_router(character_asset_router); app.include_router(reference_selector_router); app.include_router(panel_reference_router)
+app=FastAPI(title="Bot Cerita",version="2.9.0")
+for router in (asset_router,world_router,visual_router,storyboard_router,studio_router,image_provider_router,benchmark_router,character_asset_router,reference_selector_router,panel_reference_router,vertical_slice_router): app.include_router(router)
 class ContextRequest(BaseModel):
     query:str
     character_ids:list[str]=Field(default_factory=list)
@@ -27,7 +27,7 @@ class ContextRequest(BaseModel):
 @app.on_event("startup")
 def startup(): init_db(); init_studio_tables(); init_benchmark_db()
 @app.get("/health")
-async def health(): return {"status":"ok","version":"2.8.0"}
+async def health(): return {"status":"ok","version":"2.9.0"}
 @app.get("/universes",response_model=list[Universe])
 async def get_universes(): return list_universes()
 @app.post("/universes",response_model=Universe)
