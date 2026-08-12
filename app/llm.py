@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 from abc import ABC, abstractmethod
 import httpx
@@ -39,8 +40,17 @@ class AnthropicDriver(LLMDriver):
     async def generate(self, system, user, schema, model):
         if not settings.anthropic_api_key:
             raise LLMError("ANTHROPIC_API_KEY is not configured")
-        payload = {"model": model, "max_tokens": settings.max_tokens, "system": system + "\n\nReturn ONLY valid JSON matching the requested schema.", "messages": [{"role": "user", "content": user}]}
-        headers = {"x-api-key": settings.anthropic_api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"}
+        payload = {
+            "model": model,
+            "max_tokens": settings.max_tokens,
+            "system": system + "\n\nReturn ONLY valid JSON matching the requested schema.",
+            "messages": [{"role": "user", "content": user}],
+        }
+        headers = {
+            "x-api-key": settings.anthropic_api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        }
         async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
             response = await client.post(settings.anthropic_base_url.rstrip("/") + "/v1/messages", headers=headers, json=payload)
         if response.status_code >= 400:
@@ -74,6 +84,40 @@ class OpenAICompatibleDriver(LLMDriver):
             raise LLMError(f"OpenAI-compatible response has empty message content: {json.dumps(data, ensure_ascii=False)[:3000]}")
         return content
 
+    @staticmethod
+    def _strict_json_schema(schema: type[BaseModel]) -> dict:
+        """Convert Pydantic's schema into a provider-friendly strict JSON Schema.
+
+        OpenRouter documents strict structured outputs as response_format.type=json_schema
+        with strict=true. Strict providers generally require object properties to be
+        explicitly listed in required and reject undeclared properties.
+        """
+        result = copy.deepcopy(schema.model_json_schema())
+
+        def normalize(node: object):
+            if not isinstance(node, dict):
+                return
+            if node.get("type") == "object" or "properties" in node:
+                properties = node.get("properties", {})
+                node["additionalProperties"] = False
+                if properties:
+                    node["required"] = list(properties.keys())
+                for child in properties.values():
+                    normalize(child)
+            for child in node.get("$defs", {}).values():
+                normalize(child)
+            if "items" in node:
+                normalize(node["items"])
+            for child in node.get("anyOf", []):
+                normalize(child)
+            for child in node.get("oneOf", []):
+                normalize(child)
+            for child in node.get("allOf", []):
+                normalize(child)
+
+        normalize(result)
+        return result
+
     async def generate(self, system, user, schema, model):
         api_key = settings.openrouter_api_key if self.name == "openrouter" else settings.local_llm_api_key
         if not api_key and self.name != "ollama":
@@ -88,15 +132,32 @@ class OpenAICompatibleDriver(LLMDriver):
         payload = {
             "model": model,
             "messages": [
-                {"role": "system", "content": system + "\n\nReturn ONLY valid JSON matching the requested schema. Do not use markdown fences."},
+                {
+                    "role": "system",
+                    "content": system + "\n\nReturn the requested object. Follow the JSON schema exactly; do not use markdown fences.",
+                },
                 {"role": "user", "content": user},
             ],
             "max_tokens": settings.max_tokens,
         }
+        # OpenRouter structured outputs are endpoint-dependent. Requiring the
+        # provider to support the requested parameter prevents silent fallback
+        # to an endpoint that merely treats the schema as a prompt hint.
+        if self.name == "openrouter":
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": schema.__name__,
+                    "strict": True,
+                    "schema": self._strict_json_schema(schema),
+                },
+            }
+            payload["provider"] = {"require_parameters": True}
+
         async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
             response = await client.post(base_url.rstrip("/") + "/chat/completions", headers=headers, json=payload)
         if response.status_code >= 400:
-            raise LLMError(f"{self.name} error {response.status_code}: {response.text[:3000]}")
+            raise LLMError(f"{self.name} error {response.status_code}: {response.text[:5000]}")
         try:
             data = response.json()
         except ValueError as exc:
@@ -107,7 +168,11 @@ class OpenAICompatibleDriver(LLMDriver):
 
 class ModelRouter:
     def __init__(self):
-        self.drivers = {"anthropic": AnthropicDriver(), "openrouter": OpenAICompatibleDriver("openrouter"), "ollama": OpenAICompatibleDriver("ollama")}
+        self.drivers = {
+            "anthropic": AnthropicDriver(),
+            "openrouter": OpenAICompatibleDriver("openrouter"),
+            "ollama": OpenAICompatibleDriver("ollama"),
+        }
 
     def resolve(self, model: str):
         alias = settings.model_aliases.get(model)
