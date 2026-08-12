@@ -3,6 +3,10 @@ from __future__ import annotations
 import copy
 import json
 from abc import ABC, abstractmethod
+from datetime import datetime, timezone
+from pathlib import Path
+from uuid import uuid4
+
 import httpx
 from pydantic import BaseModel
 from .config import settings
@@ -106,12 +110,20 @@ class OpenAICompatibleDriver(LLMDriver):
         normalize(result)
         return result
 
-    async def _supports_structured_outputs(self, model: str, client: httpx.AsyncClient) -> bool:
-        """Use OpenRouter's model metadata to avoid sending unsupported parameters.
+    @staticmethod
+    def _debug_log(request_id: str, phase: str, payload: dict):
+        if not settings.llm_debug:
+            return
+        try:
+            directory = Path(settings.llm_log_dir)
+            directory.mkdir(parents=True, exist_ok=True)
+            path = directory / f"{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S_%f')}_{request_id}_{phase}.json"
+            path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+        except Exception:
+            # Debug logging must never break the LLM request itself.
+            pass
 
-        OpenRouter exposes supported_parameters on its Models API. This is a model-level
-        capability check; the actual provider is still guarded with require_parameters.
-        """
+    async def _supports_structured_outputs(self, model: str, client: httpx.AsyncClient) -> bool:
         if self.name != "openrouter" or settings.openrouter_structured_outputs == "disabled":
             return False
         if settings.openrouter_structured_outputs == "enabled":
@@ -134,7 +146,6 @@ class OpenAICompatibleDriver(LLMDriver):
             self._capability_cache[model] = params
             return "structured_outputs" in params and "response_format" in params
         except Exception:
-            # Capability discovery must never make the LLM unavailable.
             self._capability_cache[model] = set()
             return False
 
@@ -153,12 +164,13 @@ class OpenAICompatibleDriver(LLMDriver):
         return await client.post(base_url.rstrip("/") + "/chat/completions", headers=headers, json=payload)
 
     async def generate(self, system, user, schema, model):
+        request_id = uuid4().hex[:12]
         api_key = settings.openrouter_api_key if self.name == "openrouter" else settings.local_llm_api_key
         if not api_key and self.name != "ollama":
             raise LLMError(f"API key is not configured for {self.name}")
         headers = {"Content-Type": "application/json"}
         if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
+            headers["Authorization"] = "Bearer [REDACTED]"
         if self.name == "openrouter":
             headers["HTTP-Referer"] = "https://github.com/huda-salam/bot-cerita"
             headers["X-Title"] = "Bot Cerita"
@@ -187,17 +199,49 @@ class OpenAICompatibleDriver(LLMDriver):
                 }
                 payload["provider"] = {"require_parameters": True}
 
+            self._debug_log(request_id, "request", {
+                "request_id": request_id,
+                "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+                "provider": self.name,
+                "model": model,
+                "url": base_url.rstrip("/") + "/chat/completions",
+                "headers": headers,
+                "structured_outputs_selected": use_structured,
+                "structured_outputs_mode": settings.openrouter_structured_outputs,
+                "schema_name": schema.__name__,
+                "payload": payload,
+            })
+
             response = await self._post(client, base_url, headers, payload)
 
-            # Some OpenRouter model variants advertise model-level structured output
-            # support but have no currently available provider endpoint accepting it.
-            # In that case, retry once without response_format. This keeps free-model
-            # experimentation working while preserving strict structured output when
-            # an eligible endpoint is available.
+            self._debug_log(request_id, "response_initial", {
+                "request_id": request_id,
+                "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+                "provider": self.name,
+                "model": model,
+                "status_code": response.status_code,
+                "headers": dict(response.headers),
+                "body": response.text,
+            })
+
             if self.name == "openrouter" and use_structured and self._is_provider_parameter_404(response):
                 payload.pop("response_format", None)
                 payload.pop("provider", None)
+                self._debug_log(request_id, "request_retry", {
+                    "request_id": request_id,
+                    "reason": "provider_parameter_404",
+                    "payload": payload,
+                })
                 response = await self._post(client, base_url, headers, payload)
+                self._debug_log(request_id, "response_retry", {
+                    "request_id": request_id,
+                    "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+                    "provider": self.name,
+                    "model": model,
+                    "status_code": response.status_code,
+                    "headers": dict(response.headers),
+                    "body": response.text,
+                })
 
         if response.status_code >= 400:
             raise LLMError(f"{self.name} error {response.status_code}: {response.text[:5000]}")
@@ -206,6 +250,11 @@ class OpenAICompatibleDriver(LLMDriver):
         except ValueError as exc:
             raise LLMError(f"{self.name} returned non-JSON HTTP {response.status_code}: {response.text[:3000]}") from exc
         content = self._extract_content(data)
+        self._debug_log(request_id, "parsed", {
+            "request_id": request_id,
+            "schema_name": schema.__name__,
+            "content": content,
+        })
         return self.parse(content, schema)
 
 
