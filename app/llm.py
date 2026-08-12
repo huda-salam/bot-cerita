@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,13 +22,31 @@ class LLMDriver(ABC):
         raise NotImplementedError
 
     @staticmethod
+    def _unwrap_schema_envelope(value: object, schema: type[BaseModel]) -> object:
+        """Accept a common free-model wrapper while keeping the domain schema canonical.
+
+        Free models sometimes return {"story_spec": {...}} even when the requested
+        top-level schema is StorySpec. We only unwrap a single, schema-named envelope;
+        arbitrary malformed objects still fail normal Pydantic validation.
+        """
+        if not isinstance(value, dict) or len(value) != 1:
+            return value
+        key = next(iter(value))
+        expected = re.sub(r"(?<!^)(?=[A-Z])", "_", schema.__name__).lower()
+        if key in {expected, schema.__name__.lower()} and isinstance(value[key], dict):
+            return value[key]
+        return value
+
+    @staticmethod
     def parse(content: str, schema: type[BaseModel]) -> BaseModel:
         cleaned=content.strip()
         if cleaned.startswith("```json"): cleaned=cleaned[7:]
         elif cleaned.startswith("```"): cleaned=cleaned[3:]
         if cleaned.endswith("```"): cleaned=cleaned[:-3]
         try:
-            return schema.model_validate(json.loads(cleaned.strip()))
+            raw=json.loads(cleaned.strip())
+            normalized=LLMDriver._unwrap_schema_envelope(raw,schema)
+            return schema.model_validate(normalized)
         except Exception as exc:
             raise LLMError(f"Invalid structured output: {exc}; raw={content[:5000]}") from exc
 
@@ -132,50 +151,24 @@ class OpenAICompatibleDriver(LLMDriver):
         request_id=uuid4().hex[:12]
         api_key=settings.openrouter_api_key if self.name=="openrouter" else settings.local_llm_api_key
         if not api_key and self.name!="ollama": raise LLMError(f"API key is not configured for {self.name}")
-
         headers={"Content-Type":"application/json"}
-        # IMPORTANT: send the real key. Only debug logs are redacted.
         if api_key: headers["Authorization"]=f"Bearer {api_key}"
-        if self.name=="openrouter":
-            headers.update({"HTTP-Referer":"https://github.com/huda-salam/bot-cerita","X-Title":"Bot Cerita"})
+        if self.name=="openrouter": headers.update({"HTTP-Referer":"https://github.com/huda-salam/bot-cerita","X-Title":"Bot Cerita"})
         base_url=settings.openrouter_base_url if self.name=="openrouter" else settings.local_llm_base_url
-        payload={"model":model,"messages":[{"role":"system","content":system+"\n\nReturn ONLY valid JSON matching the requested schema. Do not use markdown fences."},{"role":"user","content":user}],"max_tokens":settings.max_tokens}
-
+        payload={"model":model,"messages":[{"role":"system","content":system+"\n\nReturn ONLY a top-level JSON object matching the requested schema. Do not wrap it in a key named after the schema. Do not use markdown fences."},{"role":"user","content":user}],"max_tokens":settings.max_tokens}
         async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
             use_structured=await self._supports_structured_outputs(model,client)
             if self.name=="openrouter" and use_structured:
                 payload["response_format"]={"type":"json_schema","json_schema":{"name":schema.__name__,"strict":True,"schema":self._strict_json_schema(schema)}}
                 payload["provider"]={"require_parameters":True}
-
-            self._debug_log(request_id,"request",{
-                "request_id":request_id,
-                "timestamp_utc":datetime.now(timezone.utc).isoformat(),
-                "provider":self.name,
-                "model":model,
-                "url":base_url.rstrip("/")+"/chat/completions",
-                "headers":self._safe_headers(headers),
-                "structured_outputs_selected":use_structured,
-                "structured_outputs_mode":settings.openrouter_structured_outputs,
-                "schema_name":schema.__name__,
-                "payload":payload,
-            })
-
+            self._debug_log(request_id,"request",{"request_id":request_id,"timestamp_utc":datetime.now(timezone.utc).isoformat(),"provider":self.name,"model":model,"url":base_url.rstrip("/")+"/chat/completions","headers":self._safe_headers(headers),"structured_outputs_selected":use_structured,"structured_outputs_mode":settings.openrouter_structured_outputs,"schema_name":schema.__name__,"payload":payload})
             response=await self._post(client,base_url,headers,payload)
-            self._debug_log(request_id,"response_initial",{
-                "request_id":request_id,"provider":self.name,"model":model,
-                "status_code":response.status_code,"headers":dict(response.headers),"body":response.text,
-            })
-
+            self._debug_log(request_id,"response_initial",{"request_id":request_id,"provider":self.name,"model":model,"status_code":response.status_code,"headers":dict(response.headers),"body":response.text})
             if self.name=="openrouter" and use_structured and self._is_provider_parameter_404(response):
-                payload.pop("response_format",None)
-                payload.pop("provider",None)
+                payload.pop("response_format",None); payload.pop("provider",None)
                 self._debug_log(request_id,"request_retry",{"request_id":request_id,"reason":"provider_parameter_404","payload":payload})
                 response=await self._post(client,base_url,headers,payload)
-                self._debug_log(request_id,"response_retry",{
-                    "request_id":request_id,"provider":self.name,"model":model,
-                    "status_code":response.status_code,"headers":dict(response.headers),"body":response.text,
-                })
-
+                self._debug_log(request_id,"response_retry",{"request_id":request_id,"provider":self.name,"model":model,"status_code":response.status_code,"headers":dict(response.headers),"body":response.text})
         if response.status_code>=400: raise LLMError(f"{self.name} error {response.status_code}: {response.text[:5000]}")
         try: data=response.json()
         except ValueError as exc: raise LLMError(f"{self.name} returned non-JSON HTTP {response.status_code}: {response.text[:3000]}") from exc
@@ -184,8 +177,7 @@ class OpenAICompatibleDriver(LLMDriver):
         return self.parse(content,schema)
 
 class ModelRouter:
-    def __init__(self):
-        self.drivers={"anthropic":AnthropicDriver(),"openrouter":OpenAICompatibleDriver("openrouter"),"ollama":OpenAICompatibleDriver("ollama")}
+    def __init__(self): self.drivers={"anthropic":AnthropicDriver(),"openrouter":OpenAICompatibleDriver("openrouter"),"ollama":OpenAICompatibleDriver("ollama")}
     def resolve(self,model):
         alias=settings.model_aliases.get(model)
         if alias:
