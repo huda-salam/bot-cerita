@@ -31,7 +31,7 @@ class LLMDriver(ABC):
         try:
             return schema.model_validate(json.loads(cleaned.strip()))
         except Exception as exc:
-            raise LLMError(f"Invalid structured output: {exc}; raw={content[:3000]}") from exc
+            raise LLMError(f"Invalid structured output: {exc}; raw={content[:5000]}") from exc
 
 
 class AnthropicDriver(LLMDriver):
@@ -46,15 +46,11 @@ class AnthropicDriver(LLMDriver):
             "system": system + "\n\nReturn ONLY valid JSON matching the requested schema.",
             "messages": [{"role": "user", "content": user}],
         }
-        headers = {
-            "x-api-key": settings.anthropic_api_key,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-        }
+        headers = {"x-api-key": settings.anthropic_api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"}
         async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
             response = await client.post(settings.anthropic_base_url.rstrip("/") + "/v1/messages", headers=headers, json=payload)
         if response.status_code >= 400:
-            raise LLMError(f"Anthropic error {response.status_code}: {response.text[:2000]}")
+            raise LLMError(f"Anthropic error {response.status_code}: {response.text[:3000]}")
         data = response.json()
         content = "".join(block.get("text", "") for block in data.get("content", []) if block.get("type") == "text")
         return self.parse(content, schema)
@@ -65,6 +61,7 @@ class OpenAICompatibleDriver(LLMDriver):
 
     def __init__(self, name: str):
         self.name = name
+        self._capability_cache: dict[str, set[str]] = {}
 
     @staticmethod
     def _extract_content(data: dict) -> str:
@@ -86,12 +83,6 @@ class OpenAICompatibleDriver(LLMDriver):
 
     @staticmethod
     def _strict_json_schema(schema: type[BaseModel]) -> dict:
-        """Convert Pydantic's schema into a provider-friendly strict JSON Schema.
-
-        OpenRouter documents strict structured outputs as response_format.type=json_schema
-        with strict=true. Strict providers generally require object properties to be
-        explicitly listed in required and reject undeclared properties.
-        """
         result = copy.deepcopy(schema.model_json_schema())
 
         def normalize(node: object):
@@ -108,15 +99,58 @@ class OpenAICompatibleDriver(LLMDriver):
                 normalize(child)
             if "items" in node:
                 normalize(node["items"])
-            for child in node.get("anyOf", []):
-                normalize(child)
-            for child in node.get("oneOf", []):
-                normalize(child)
-            for child in node.get("allOf", []):
-                normalize(child)
+            for key in ("anyOf", "oneOf", "allOf"):
+                for child in node.get(key, []):
+                    normalize(child)
 
         normalize(result)
         return result
+
+    async def _supports_structured_outputs(self, model: str, client: httpx.AsyncClient) -> bool:
+        """Use OpenRouter's model metadata to avoid sending unsupported parameters.
+
+        OpenRouter exposes supported_parameters on its Models API. This is a model-level
+        capability check; the actual provider is still guarded with require_parameters.
+        """
+        if self.name != "openrouter" or settings.openrouter_structured_outputs == "disabled":
+            return False
+        if settings.openrouter_structured_outputs == "enabled":
+            return True
+        if model in self._capability_cache:
+            return "structured_outputs" in self._capability_cache[model] and "response_format" in self._capability_cache[model]
+
+        encoded = model.split("/", 1)
+        if len(encoded) != 2:
+            return False
+        author, slug = encoded
+        url = f"{settings.openrouter_base_url.rstrip('/')}/model/{author}/{slug}"
+        headers = {"Authorization": f"Bearer {settings.openrouter_api_key}"} if settings.openrouter_api_key else {}
+        try:
+            response = await client.get(url, headers=headers)
+            if response.status_code >= 400:
+                self._capability_cache[model] = set()
+                return False
+            params = set(response.json().get("data", {}).get("supported_parameters", []))
+            self._capability_cache[model] = params
+            return "structured_outputs" in params and "response_format" in params
+        except Exception:
+            # Capability discovery must never make the LLM unavailable.
+            self._capability_cache[model] = set()
+            return False
+
+    @staticmethod
+    def _is_provider_parameter_404(response: httpx.Response) -> bool:
+        if response.status_code != 404:
+            return False
+        try:
+            body = response.json()
+            message = body.get("error", {}).get("message", "")
+            return "No endpoints found that can handle the requested parameters" in message
+        except Exception:
+            return "No endpoints found that can handle the requested parameters" in response.text
+
+    async def _post(self, client, base_url, headers, payload):
+        return await client.post(base_url.rstrip("/") + "/chat/completions", headers=headers, json=payload)
 
     async def generate(self, system, user, schema, model):
         api_key = settings.openrouter_api_key if self.name == "openrouter" else settings.local_llm_api_key
@@ -129,33 +163,42 @@ class OpenAICompatibleDriver(LLMDriver):
             headers["HTTP-Referer"] = "https://github.com/huda-salam/bot-cerita"
             headers["X-Title"] = "Bot Cerita"
         base_url = settings.openrouter_base_url if self.name == "openrouter" else settings.local_llm_base_url
+
+        structured_instruction = "Return ONLY valid JSON matching the requested schema. Do not use markdown fences."
         payload = {
             "model": model,
             "messages": [
-                {
-                    "role": "system",
-                    "content": system + "\n\nReturn the requested object. Follow the JSON schema exactly; do not use markdown fences.",
-                },
+                {"role": "system", "content": system + "\n\n" + structured_instruction},
                 {"role": "user", "content": user},
             ],
             "max_tokens": settings.max_tokens,
         }
-        # OpenRouter structured outputs are endpoint-dependent. Requiring the
-        # provider to support the requested parameter prevents silent fallback
-        # to an endpoint that merely treats the schema as a prompt hint.
-        if self.name == "openrouter":
-            payload["response_format"] = {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": schema.__name__,
-                    "strict": True,
-                    "schema": self._strict_json_schema(schema),
-                },
-            }
-            payload["provider"] = {"require_parameters": True}
 
         async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
-            response = await client.post(base_url.rstrip("/") + "/chat/completions", headers=headers, json=payload)
+            use_structured = await self._supports_structured_outputs(model, client)
+            if self.name == "openrouter" and use_structured:
+                payload["response_format"] = {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": schema.__name__,
+                        "strict": True,
+                        "schema": self._strict_json_schema(schema),
+                    },
+                }
+                payload["provider"] = {"require_parameters": True}
+
+            response = await self._post(client, base_url, headers, payload)
+
+            # Some OpenRouter model variants advertise model-level structured output
+            # support but have no currently available provider endpoint accepting it.
+            # In that case, retry once without response_format. This keeps free-model
+            # experimentation working while preserving strict structured output when
+            # an eligible endpoint is available.
+            if self.name == "openrouter" and use_structured and self._is_provider_parameter_404(response):
+                payload.pop("response_format", None)
+                payload.pop("provider", None)
+                response = await self._post(client, base_url, headers, payload)
+
         if response.status_code >= 400:
             raise LLMError(f"{self.name} error {response.status_code}: {response.text[:5000]}")
         try:
@@ -168,11 +211,7 @@ class OpenAICompatibleDriver(LLMDriver):
 
 class ModelRouter:
     def __init__(self):
-        self.drivers = {
-            "anthropic": AnthropicDriver(),
-            "openrouter": OpenAICompatibleDriver("openrouter"),
-            "ollama": OpenAICompatibleDriver("ollama"),
-        }
+        self.drivers = {"anthropic": AnthropicDriver(), "openrouter": OpenAICompatibleDriver("openrouter"), "ollama": OpenAICompatibleDriver("ollama")}
 
     def resolve(self, model: str):
         alias = settings.model_aliases.get(model)
